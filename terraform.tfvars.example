@@ -1,0 +1,50 @@
+# ===========================================================================
+# Exemple de variables Terraform.
+#
+# En CI (GitHub Actions), les secrets viennent des GitHub Secrets (TF_VAR_*).
+# Ce fichier n'est utile que pour un test en local :
+#   cp terraform.tfvars.example terraform.tfvars   (NON versionné)
+# ===========================================================================
+
+project = "mailmanager"
+
+# ---- Groupe de ressources CRÉÉ par Terraform (tout le projet dedans) ----
+resource_group_name = "rg-mailmanager"
+location            = "westeurope"
+
+# ---- Suffixe fixe des noms de ressources ----
+# Donne : mailmanagersttf, mailmanager-kv-tf,
+#         mailmanager-app-tf, mailmanager-func-tf
+name_suffix = "tf"
+
+# ---- Noms des apps ----
+# Laissés vides : dérivés de project + name_suffix.
+# Décommentez pour imposer un nom précis (il doit être libre dans tout Azure).
+# web_app_name      = "mailmanager-app-tf"
+# function_app_name = "mailmanager-func-tf"
+
+# ---- Plan de la Web App ----
+# B1 (~13€/mois, always_on) ou F1 (gratuit, l'app s'endort)
+web_app_sku    = "B1"
+python_version = "3.11"
+
+# ---- Config applicative non sensible ----
+groq_model          = "llama-3.3-70b-versatile"
+mail_max_results    = "10"
+mail_preview_length = "220"
+mail_retention_days = "30"
+debug               = "false"
+blob_container_name = "mails-anonymized"
+
+# ---- Function (purge quotidienne) ----
+retention_cron          = "0 0 3 * * *" # tous les jours à 03:00 UTC
+function_retention_days = "30"
+
+# ===========================================================================
+# SECRETS - uniquement pour un test local (fichier non versionné).
+# En CI ils viennent des GitHub Secrets. Un secret vide n'est pas créé.
+# ===========================================================================
+# groq_api_key      = "gsk_xxxxxxxxxxxxxxxx"
+# session_secret    = ""   # vide = généré automatiquement
+# whatsapp_phone    = ""
+# callmebot_api_key = ""
