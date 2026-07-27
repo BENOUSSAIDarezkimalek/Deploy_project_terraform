@@ -23,6 +23,14 @@ locals {
   }
 
   secrets = { for k, v in local.candidate_secrets : k => v if v != "" }
+
+  active_secret_names = toset(compact([
+    nonsensitive(var.groq_api_key != "") ? "groq-api-key" : "",
+    "session-secret",
+    nonsensitive(var.whatsapp_phone != "") ? "whatsapp-phone" : "",
+    nonsensitive(var.callmebot_api_key != "") ? "callmebot-api-key" : "",
+    "azure-storage-connection-string",
+  ]))
 }
 
 # ---------------------------------------------------------------------------
@@ -61,9 +69,9 @@ resource "time_sleep" "wait_rbac" {
 # Secrets (un par entrée non vide de local.secrets)
 # ---------------------------------------------------------------------------
 resource "azurerm_key_vault_secret" "app" {
-  for_each     = local.secrets
-  name         = each.key
-  value        = each.value
+  for_each     = local.active_secret_names
+  name         = each.value
+  value        = local.candidate_secrets[each.value]
   key_vault_id = azurerm_key_vault.main.id
 
   depends_on = [
