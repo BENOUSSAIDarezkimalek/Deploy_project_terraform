@@ -1,0 +1,157 @@
+name: Terraform (infra)
+
+# Deux jobs :
+#   - plan  : se lance automatiquement (push sur main, PR, ou manuellement)
+#   - apply : ne démarre QU'APRÈS approbation manuelle (environnement "production")
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - '.github/workflows/terraform.yml'
+  pull_request:
+    paths:
+      - 'infra/**'
+  workflow_dispatch:
+
+env:
+  # >>> À MODIFIER UNE FOIS : nom UNIQUE dans tout Azure (minuscules/chiffres, <=24)
+  TFSTATE_SA: tfstateagentpa2026
+  # Groupe dédié au state Terraform, créé automatiquement.
+  TFSTATE_RG: rg-tfstate
+  LOCATION: westeurope
+
+jobs:
+  # =========================================================================
+  # JOB 1 — PLAN (automatique)
+  # =========================================================================
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_groq_api_key: ${{ secrets.GROQ_API_KEY }}
+      TF_VAR_whatsapp_phone: ${{ secrets.WHATSAPP_PHONE }}
+      TF_VAR_callmebot_api_key: ${{ secrets.CALLMEBOT_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connexion Azure
+        run: |
+          az login --service-principal \
+            -u "$ARM_CLIENT_ID" -p "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" -o none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      - name: Créer le stockage du state (idempotent)
+        run: |
+          az group create -n "$TFSTATE_RG" -l "$LOCATION" -o none
+          az storage account create -n "$TFSTATE_SA" -g "$TFSTATE_RG" \
+            -l "$LOCATION" --sku Standard_LRS --allow-blob-public-access false -o none || true
+          KEY=$(az storage account keys list -n "$TFSTATE_SA" -g "$TFSTATE_RG" --query "[0].value" -o tsv)
+          az storage container create -n tfstate --account-name "$TFSTATE_SA" --account-key "$KEY" -o none || true
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=$TFSTATE_RG" \
+            -backend-config="storage_account_name=$TFSTATE_SA" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=agent-pa.tfstate"
+
+      - name: Terraform fmt (non bloquant)
+        working-directory: infra
+        continue-on-error: true
+        run: terraform fmt -check -recursive
+
+      - name: Terraform validate
+        working-directory: infra
+        run: terraform validate
+
+      - name: Terraform plan
+        working-directory: infra
+        run: |
+          terraform plan -no-color | tee "$RUNNER_TEMP/plan.txt"
+
+      - name: Publier le plan dans le résumé du job
+        if: always()
+        run: |
+          {
+            echo "## Terraform plan"
+            echo '```'
+            tail -c 60000 "$RUNNER_TEMP/plan.txt" 2>/dev/null || echo "(plan indisponible)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # =========================================================================
+  # JOB 2 — APPLY (manuel : attend une approbation)
+  # =========================================================================
+  apply:
+    name: Apply (approbation requise)
+    needs: plan
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    # C'est CETTE ligne qui rend l'apply manuel.
+    # Prérequis : créer l'environnement "production" dans les paramètres du
+    # repo et y ajouter un "required reviewer" (voir le README).
+    environment: production
+
+    env:
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_groq_api_key: ${{ secrets.GROQ_API_KEY }}
+      TF_VAR_whatsapp_phone: ${{ secrets.WHATSAPP_PHONE }}
+      TF_VAR_callmebot_api_key: ${{ secrets.CALLMEBOT_API_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Connexion Azure
+        run: |
+          az login --service-principal \
+            -u "$ARM_CLIENT_ID" -p "$ARM_CLIENT_SECRET" --tenant "$ARM_TENANT_ID" -o none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Terraform init
+        working-directory: infra
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=$TFSTATE_RG" \
+            -backend-config="storage_account_name=$TFSTATE_SA" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=agent-pa.tfstate"
+
+      - name: Terraform apply
+        working-directory: infra
+        run: terraform apply -auto-approve
+
+      - name: Publier les outputs
+        if: success()
+        working-directory: infra
+        run: |
+          {
+            echo "## Ressources déployées"
+            echo '```'
+            terraform output -no-color
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
