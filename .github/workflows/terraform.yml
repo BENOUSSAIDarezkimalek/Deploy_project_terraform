@@ -1,25 +1,34 @@
 name: Terraform (infra)
 
-# Deux jobs :
-#   - plan  : se lance automatiquement (push sur main, PR, ou manuellement)
-#   - apply : ne démarre QU'APRÈS approbation manuelle (environnement "production")
+
 on:
   push:
     branches: [main]
     paths:
-      - 'infra/**'
+      - '**.tf'
+      - '.terraform.lock.hcl'
       - '.github/workflows/terraform.yml'
   pull_request:
     paths:
-      - 'infra/**'
+      - '**.tf'
+      - '.terraform.lock.hcl'
   workflow_dispatch:
 
+
+permissions:
+  contents: read
+
+
+concurrency:
+  group: terraform-infra
+  cancel-in-progress: false
+
 env:
-  # >>> À MODIFIER UNE FOIS : nom UNIQUE dans tout Azure (minuscules/chiffres, <=24)
-  TFSTATE_SA: tfstateagentpa2026
-  # Groupe dédié au state Terraform, créé automatiquement.
+  TFSTATE_SA: tfstatemailmgr2026
   TFSTATE_RG: rg-tfstate
   LOCATION: westeurope
+  TF_VERSION: 1.9.8
+  TF_IN_AUTOMATION: 'true'
 
 jobs:
   # =========================================================================
@@ -42,6 +51,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Vérifier que les secrets Azure sont présents
+        run: |
+          missing=""
+          for v in ARM_CLIENT_ID ARM_CLIENT_SECRET ARM_TENANT_ID ARM_SUBSCRIPTION_ID; do
+            eval "val=\$$v"
+            [ -z "$val" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::GitHub Secrets manquants :$missing"
+            echo "::error::Settings > Secrets and variables > Actions"
+            exit 1
+          fi
+          echo "Secrets Azure présents."
+
       - name: Connexion Azure
         run: |
           az login --service-principal \
@@ -50,39 +73,52 @@ jobs:
 
       - name: Créer le stockage du state (idempotent)
         run: |
-          az group create -n "$TFSTATE_RG" -l "$LOCATION" -o none
-          az storage account create -n "$TFSTATE_SA" -g "$TFSTATE_RG" \
-            -l "$LOCATION" --sku Standard_LRS --allow-blob-public-access false -o none || true
+          az group create -n "$TFSTATE_RG" -l "$LOCATION" -o none --only-show-errors
+
+          if ! az storage account show -n "$TFSTATE_SA" -g "$TFSTATE_RG" -o none 2>/dev/null; then
+            echo "Création du compte de stockage $TFSTATE_SA..."
+            # Pas de "|| true" ici : si le nom est déjà pris ailleurs dans Azure,
+            # il faut échouer tout de suite avec un message clair plutôt que de
+            # planter deux lignes plus loin sur un "ResourceNotFound" obscur.
+            az storage account create -n "$TFSTATE_SA" -g "$TFSTATE_RG" -l "$LOCATION" \
+              --sku Standard_LRS --allow-blob-public-access false \
+              --min-tls-version TLS1_2 -o none --only-show-errors \
+            || {
+                 echo "::error::Impossible de créer le storage account '$TFSTATE_SA'."
+                 echo "::error::Ce nom est probablement déjà pris dans Azure (il doit être unique mondialement)."
+                 echo "::error::Changez TFSTATE_SA en haut de ce workflow."
+                 exit 1
+               }
+          fi
+
           KEY=$(az storage account keys list -n "$TFSTATE_SA" -g "$TFSTATE_RG" --query "[0].value" -o tsv)
-          az storage container create -n tfstate --account-name "$TFSTATE_SA" --account-key "$KEY" -o none || true
+          az storage container create -n tfstate \
+            --account-name "$TFSTATE_SA" --account-key "$KEY" -o none --only-show-errors
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform init
-        working-directory: infra
         run: |
-          terraform init \
+          terraform init -input=false \
             -backend-config="resource_group_name=$TFSTATE_RG" \
             -backend-config="storage_account_name=$TFSTATE_SA" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=agent-pa.tfstate"
 
       - name: Terraform fmt (non bloquant)
-        working-directory: infra
         continue-on-error: true
         run: terraform fmt -check -recursive
 
       - name: Terraform validate
-        working-directory: infra
         run: terraform validate
 
       - name: Terraform plan
-        working-directory: infra
         run: |
-          terraform plan -no-color | tee "$RUNNER_TEMP/plan.txt"
+          terraform plan -input=false -lock-timeout=5m -no-color \
+            | tee "$RUNNER_TEMP/plan.txt"
 
       - name: Publier le plan dans le résumé du job
         if: always()
@@ -96,6 +132,11 @@ jobs:
 
   # =========================================================================
   # JOB 2 — APPLY (manuel : attend une approbation)
+  #
+  # Note : l'apply recalcule son propre plan au lieu de réutiliser un fichier
+  # tfplan produit par le job "plan". C'est volontaire — un fichier de plan
+  # contient les valeurs des secrets en clair, et les artefacts GitHub sont
+  # lisibles par toute personne ayant accès au dépôt.
   # =========================================================================
   apply:
     name: Apply (approbation requise)
@@ -103,9 +144,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
-    # C'est CETTE ligne qui rend l'apply manuel.
-    # Prérequis : créer l'environnement "production" dans les paramètres du
-    # repo et y ajouter un "required reviewer" (voir le README).
+
     environment: production
 
     env:
@@ -130,24 +169,21 @@ jobs:
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.8
+          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform init
-        working-directory: infra
         run: |
-          terraform init \
+          terraform init -input=false \
             -backend-config="resource_group_name=$TFSTATE_RG" \
             -backend-config="storage_account_name=$TFSTATE_SA" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=agent-pa.tfstate"
 
       - name: Terraform apply
-        working-directory: infra
-        run: terraform apply -auto-approve
+        run: terraform apply -input=false -auto-approve -lock-timeout=5m
 
       - name: Publier les outputs
         if: success()
-        working-directory: infra
         run: |
           {
             echo "## Ressources déployées"

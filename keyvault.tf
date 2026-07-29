@@ -22,8 +22,10 @@ locals {
     "azure-storage-connection-string" = azurerm_storage_account.main.primary_connection_string
   }
 
-  secrets = { for k, v in local.candidate_secrets : k => v if v != "" }
-
+  # Noms des secrets réellement créés. Construit avec nonsensitive() : filtrer
+  # candidate_secrets par une condition portant sur les variables sensibles
+  # contaminerait tout le résultat (y compris les clés), et Terraform
+  # refuserait alors de l'exposer en output ou l'afficherait masqué.
   active_secret_names = toset(compact([
     nonsensitive(var.groq_api_key != "") ? "groq-api-key" : "",
     "session-secret",
@@ -66,7 +68,7 @@ resource "time_sleep" "wait_rbac" {
 }
 
 # ---------------------------------------------------------------------------
-# Secrets (un par entrée non vide de local.secrets)
+# Secrets (un par entrée de local.active_secret_names)
 # ---------------------------------------------------------------------------
 resource "azurerm_key_vault_secret" "app" {
   for_each     = local.active_secret_names
@@ -97,6 +99,6 @@ locals {
   app_kv_refs = {
     for env_name, secret_name in local.app_secret_env_map :
     env_name => "@Microsoft.KeyVault(SecretUri=${azurerm_key_vault_secret.app[secret_name].versionless_id})"
-    if contains(keys(local.secrets), secret_name)
+    if contains(local.active_secret_names, secret_name)
   }
 }

@@ -43,7 +43,10 @@ output "key_vault_name" {
   value       = azurerm_key_vault.main.name
 }
 
+# Dérivé de local.active_secret_names (construit avec nonsensitive()) et non
+# de keys(local.secrets) : ce dernier était marqué sensible par Terraform, ce
+# qui faisait échouer le plan avec « Output refers to sensitive values ».
 output "created_secrets" {
   description = "Liste des secrets créés dans le Key Vault."
-  value       = sort(keys(local.secrets))
+  value       = sort(tolist(local.active_secret_names))
 }
