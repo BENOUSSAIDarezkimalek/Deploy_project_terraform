@@ -24,7 +24,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TFSTATE_SA: tfstatemailmgr2026
+  # Compte déjà créé à la main dans rg-tfstate (spaincentral), container
+  # "tfstate" présent. Le job le réutilise tel quel.
+  TFSTATE_SA: tfstatemailmg
   TFSTATE_RG: rg-tfstate
   # La policy « Allowed resource deployment regions » de la souscription
   # n'autorise que : norwayeast, uaenorth, spaincentral, swedencentral,
@@ -77,7 +79,16 @@ jobs:
 
       - name: Créer le stockage du state (idempotent)
         run: |
-          az group create -n "$TFSTATE_RG" -l "$LOCATION" -o none --only-show-errors
+          # `az group create` n'est PAS idempotent quand la région change : il
+          # échoue avec InvalidResourceGroupLocation si le groupe existe déjà
+          # ailleurs (un resource group ne peut pas être déplacé). On ne le crée
+          # donc que s'il est absent. Sa région n'est que de la métadonnée : les
+          # ressources qu'il contient peuvent vivre dans une autre région.
+          if ! az group show -n "$TFSTATE_RG" -o none 2>/dev/null; then
+            az group create -n "$TFSTATE_RG" -l "$LOCATION" -o none --only-show-errors
+          else
+            echo "Groupe $TFSTATE_RG déjà présent ($(az group show -n "$TFSTATE_RG" --query location -o tsv))."
+          fi
 
           if ! az storage account show -n "$TFSTATE_SA" -g "$TFSTATE_RG" -o none 2>/dev/null; then
             echo "Création du compte de stockage $TFSTATE_SA..."
