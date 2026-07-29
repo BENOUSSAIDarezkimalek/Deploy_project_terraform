@@ -26,7 +26,11 @@ concurrency:
 env:
   TFSTATE_SA: tfstatemailmgr2026
   TFSTATE_RG: rg-tfstate
-  LOCATION: westeurope
+  # La policy « Allowed resource deployment regions » de la souscription
+  # n'autorise que : norwayeast, uaenorth, spaincentral, swedencentral,
+  # germanywestcentral. westeurope est refusée (RequestDisallowedByAzure).
+  # Doit rester cohérent avec le défaut de var.location (variables.tf).
+  LOCATION: spaincentral
   TF_VERSION: 1.9.8
   TF_IN_AUTOMATION: 'true'
 
@@ -84,9 +88,10 @@ jobs:
               --sku Standard_LRS --allow-blob-public-access false \
               --min-tls-version TLS1_2 -o none --only-show-errors \
             || {
-                 echo "::error::Impossible de créer le storage account '$TFSTATE_SA'."
-                 echo "::error::Ce nom est probablement déjà pris dans Azure (il doit être unique mondialement)."
-                 echo "::error::Changez TFSTATE_SA en haut de ce workflow."
+                 echo "::error::Impossible de créer le storage account '$TFSTATE_SA'. Deux causes possibles :"
+                 echo "::error::1) RequestDisallowedByAzure -> la région '$LOCATION' est refusée par la policy de la souscription."
+                 echo "::error::   Régions autorisées : az policy assignment list --query \"[?displayName=='Allowed resource deployment regions'].parameters\""
+                 echo "::error::2) AlreadyExists -> le nom est déjà pris (unique mondialement). Vérifier : az storage account check-name --name $TFSTATE_SA"
                  exit 1
                }
           fi

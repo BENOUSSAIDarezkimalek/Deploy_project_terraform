@@ -23,10 +23,23 @@ variable "resource_group_name" {
   default     = "rg-mailmanager"
 }
 
+# La policy « Allowed resource deployment regions » de cette souscription
+# n'autorise que : norwayeast, uaenorth, spaincentral, swedencentral,
+# germanywestcentral. Toute autre région échoue avec RequestDisallowedByAzure.
+# Liste à jour : az policy assignment list \
+#   --query "[?displayName=='Allowed resource deployment regions'].parameters"
 variable "location" {
-  description = "Région Azure. West Europe par défaut (quota Azure for Students généralement disponible)."
+  description = "Région Azure. Doit faire partie des régions autorisées par la policy de la souscription."
   type        = string
-  default     = "westeurope"
+  default     = "spaincentral"
+
+  validation {
+    condition = contains([
+      "norwayeast", "uaenorth", "spaincentral",
+      "swedencentral", "germanywestcentral",
+    ], var.location)
+    error_message = "Région refusée par la policy Azure de la souscription. Autorisées : norwayeast, uaenorth, spaincentral, swedencentral, germanywestcentral."
+  }
 }
 
 variable "name_suffix" {
