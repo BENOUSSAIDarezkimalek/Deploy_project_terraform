@@ -2,25 +2,23 @@
 # FUNCTION APP (purge quotidienne des blobs) — RG batchdeletelastmail
 # ===========================================================================
 
-# Plan Consumption (Linux) — facturation à l'exécution, idéal pour un timer.
-resource "azurerm_service_plan" "function" {
-  name                = "asp-func-${var.project}"
-  resource_group_name = azurerm_resource_group.main.name
-  location            = azurerm_resource_group.main.location
-  os_type             = "Linux"
-  sku_name            = "Y1"
-  tags                = var.tags
-}
-
 # ---------------------------------------------------------------------------
-# Function App
-# Le backing store (AzureWebJobsStorage) réutilise le Storage Account de l'app.
+# Pas de plan dédié : la Function partage le plan App Service de la Web App.
+#
+# Le plan Consumption (Y1) serait le choix naturel pour un timer, mais Azure
+# le refuse dans les régions autorisées par la policy de cette souscription :
+#   "Requested features are not supported in region" (ExtendedCode 59911)
+# malgré des métadonnées qui l'annoncent disponible.
+#
+# Partager asp-<project> ne coûte rien de plus et convient à une purge
+# quotidienne. Contrainte : sur un plan dédié (non-Consumption), un timer
+# trigger n'est fiable que si always_on est activé — d'où le réglage plus bas.
 # ---------------------------------------------------------------------------
 resource "azurerm_linux_function_app" "main" {
   name                = local.function_app_name
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  service_plan_id     = azurerm_service_plan.function.id
+  service_plan_id     = azurerm_service_plan.web.id
   https_only          = true
   tags                = var.tags
 
@@ -34,6 +32,10 @@ resource "azurerm_linux_function_app" "main" {
   }
 
   site_config {
+    # Obligatoire sur un plan dédié : sans always_on, l'app est déchargée après
+    # inactivité et le timer trigger ne se déclenche plus. Non supporté sur F1.
+    always_on = var.web_app_sku != "F1"
+
     application_stack {
       python_version = var.python_version
     }

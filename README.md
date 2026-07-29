@@ -21,7 +21,7 @@ par défaut), créé par Terraform :
 | App Service Plan + Web App (Linux, Python) | héberge l'app NiceGUI |
 | Storage Account + container `mails-anonymized` | mails anonymisés + backing store Function |
 | Key Vault | secrets de l'application |
-| Plan Consumption + Function App | purge quotidienne des blobs (le batch) |
+| Function App (sur le même plan que la Web App) | purge quotidienne des blobs (le batch) |
 
 > **Rien n'est supprimé.** Les ressources créées manuellement dans
 > `projet_annuel` et `batchdeletelastmail` ne sont ni lues, ni modifiées, ni
