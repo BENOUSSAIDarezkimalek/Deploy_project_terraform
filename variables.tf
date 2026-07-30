@@ -85,9 +85,13 @@ variable "function_app_name" {
 # ===========================================================================
 
 variable "web_app_sku" {
-  description = "SKU du plan App Service de la Web App. F1 = gratuit (sans always_on), B1 ≈ 13€/mois."
+  description = "SKU du plan App Service de la Web App. F1 = gratuit (sans always_on), B1 ≈ 13€/mois, B2 ≈ 26€/mois."
   type        = string
+<<<<<<< HEAD
   default     = "B3"
+=======
+  default     = "B2"
+>>>>>>> c733150507b44132332ee87bc6cc3c1a1b54b195
 }
 
 variable "python_version" {
